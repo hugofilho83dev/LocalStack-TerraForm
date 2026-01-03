@@ -1,0 +1,97 @@
+name: Terraform LocalStack CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+
+env:
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+  AWS_ENDPOINT_URL: http://${{ vars.HOSTVPS }}:4566
+
+jobs:
+  terraform-localstack:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Verificar saúde do LocalStack
+        run: |
+          curl -s http://${{ vars.HOSTVPS }}:4566/_localstack/health | jq '.'
+          
+      - name: Configurar Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Format Check
+        run: terraform fmt -check
+        continue-on-error: true
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -var="aws_region=${{ env.AWS_DEFAULT_REGION }}" \
+            -out=tfplan
+        env:
+          AWS_ENDPOINT_URL: http://${{ vars.HOSTVPS }}:4566
+
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -auto-approve tfplan
+        env:
+          AWS_ENDPOINT_URL: http://${{ vars.HOSTVPS }}:4566
+
+      - name: Validar recursos provisionados
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          echo "Verificando buckets S3..."
+          aws --endpoint-url=http://${{ vars.HOSTVPS }}:4566 s3 ls
+          
+          echo "Verificando filas SQS..."
+          aws --endpoint-url=http://${{ vars.HOSTVPS }}:4566 sqs list-queues
+          
+          echo "Verificando chaves KMS..."
+          aws --endpoint-url=http://${{ vars.HOSTVPS }}:4566 kms list-keys
+
+      - name: Upload Terraform Plan
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: tfplan
+          retention-days: 5
+
+      - name: Comentar PR com Plan
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const output = `#### Terraform Plan 📋
+            
+            **Status:** ✅ Sucesso
+            
+            Para aplicar essas mudanças, faça merge desta PR para a branch main.`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
