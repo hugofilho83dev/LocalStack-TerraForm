@@ -48,6 +48,7 @@ jobs:
         run: |
           terraform plan \
             -var="aws_region=${{ env.AWS_DEFAULT_REGION }}" \
+            -var="aws_endpoint=http://${{ vars.HOSTVPS }}:4566" \
             -out=tfplan
         env:
           AWS_ENDPOINT_URL: http://${{ vars.HOSTVPS }}:4566
